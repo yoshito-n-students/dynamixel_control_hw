@@ -21,6 +21,7 @@
 #include <joint_limits_interface/joint_limits_interface.h>
 #include <joint_limits_interface/joint_limits_rosparam.h>
 #include <joint_limits_interface/joint_limits_urdf.h>
+#include <embedded_joint_limits_interface/embedded_joint_limits_interface.hpp>
 
 // Library for access to the dynamixels
 #include <dynamixel/dynamixel.hpp>
@@ -89,6 +90,8 @@ namespace dynamixel {
         hardware_interface::PositionJointInterface _jnt_pos_interface;
         hardware_interface::VelocityJointInterface _jnt_vel_interface;
         hardware_interface::EffortJointInterface _jnt_eff_interface;
+        // interface for position command + torque limit
+        embedded_joint_limits_interface::EmbeddedJointLimitsInterface _jnt_pos_eff_interface;
 
         // Joint limits (hard and soft)
         joint_limits_interface::PositionJointSoftLimitsInterface _jnt_pos_lim_interface;
@@ -100,9 +103,8 @@ namespace dynamixel {
         // It reads here the latest robot's state and put here the next desired values
         std::vector<double> _prev_commands;
         std::vector<double> _joint_commands; // target joint angle or speed
-        // target joint sub-commands (ex. current limit in torque-multi (current-based position) mode)
-        std::vector<double> _prev_commands2;
-        std::vector<double> _joint_commands2;
+        std::vector<joint_limits_interface::JointLimits> _prev_limits;
+        std::vector<joint_limits_interface::JointLimits> _joint_limits;
         std::vector<double> _joint_angles; // actual joint angle
         std::vector<double> _joint_velocities; // actual joint velocity
         std::vector<double> _joint_efforts; // compulsory but not used
@@ -207,12 +209,8 @@ namespace dynamixel {
                     // tell ros_control the in-memory address to change to set new
                     // position or velocity goal for the actuator (depending on
                     // hardware_mode)
-                    hardware_interface::JointHandle cmd_handle(
-                        _jnt_state_interface.getHandle(dynamixel_iterator->second),
-                        &_joint_commands[i]);
-                    hardware_interface::JointHandle cmd_handle2(
-                        _jnt_state_interface.getHandle(dynamixel_iterator->second),
-                        &_joint_commands2[i]);
+                    hardware_interface::JointHandle cmd_handle(state_handle, &_joint_commands[i]);
+                    embedded_joint_limits_interface::EmbeddedJointLimitsHandle cmd_lim_handle(cmd_handle, &_joint_limits[i]);
                     if (OperatingMode::joint == hardware_mode) {
                         _jnt_pos_interface.registerHandle(cmd_handle);
                     }
@@ -220,8 +218,7 @@ namespace dynamixel {
                         _jnt_vel_interface.registerHandle(cmd_handle);
                     }
                     else if (OperatingMode::torque_multi == hardware_mode) {
-                        _jnt_pos_interface.registerHandle(cmd_handle);
-                        _jnt_eff_interface.registerHandle(cmd_handle2);
+                        _jnt_pos_eff_interface.registerHandle(cmd_lim_handle);
                     }
                     else if (OperatingMode::unknown != hardware_mode) {
                         ROS_ERROR_STREAM("Servo " << id << " was not initialised "
@@ -259,6 +256,7 @@ namespace dynamixel {
             registerInterface(&_jnt_pos_interface);
             registerInterface(&_jnt_vel_interface);
             registerInterface(&_jnt_eff_interface);
+            registerInterface(&_jnt_pos_eff_interface);
         }
         catch (const ros::Exception& e) {
             // TODO: disable actuators that were enabled ?
@@ -281,8 +279,7 @@ namespace dynamixel {
             }
             else if (OperatingMode::torque_multi == mode) {
                 _joint_commands[i] = _joint_angles[i];
-                _prev_commands2[i] = 1.; // set non-zero to write _joint_commands[i] to the servo
-                _joint_commands2[i] = 0.;
+                _joint_limits[i].max_effort = 0.;
             }
         }
 
@@ -379,7 +376,7 @@ namespace dynamixel {
         // ensure that the joints limits are respected
         _enforce_limits(loop_period);
 
-        // write the primary command
+        // write the command
         for (unsigned int i = 0; i < _servos.size(); i++) {
             // Sending commands only when needed
             if (std::abs(_joint_commands[i] - _prev_commands[i]) < std::numeric_limits<double>::epsilon())
@@ -445,23 +442,22 @@ namespace dynamixel {
             }
         }
 
-        // write the sub commands
+        // write the embedded joint limits
         for (unsigned int i = 0; i < _servos.size(); i++) {
-            // Sending commands only when needed
-            if (std::abs(_joint_commands2[i] - _prev_commands2[i]) < std::numeric_limits<double>::epsilon())
-                continue;
-            _prev_commands2[i] = _joint_commands2[i];
             try {
                 dynamixel::StatusPacket<Protocol> status;
 
-                double command = _joint_commands2[i];
-
                 OperatingMode mode = _c_mode_map[_servos[i]->id()];
                 if (OperatingMode::torque_multi == mode) {
+                    // Sending limits only when needed
+                    if (std::abs(_joint_limits[i].max_effort - _prev_limits[i].max_effort) < std::numeric_limits<double>::epsilon())
+                        continue;
+                    _prev_limits[i] = _joint_limits[i];
+
                     // TODO: no hard-coded torque constant
                     _dynamixel_controller.send(
                         _servos[i]->reg_goal_current(static_cast<uint16_t>(static_cast<int16_t>
-                        (command * 5.2 / 8.4 /* A / (N*m) */ * 1000. / 3.36 /* count / A */))));
+                        (_joint_limits[i].max_effort * 5.2 / 8.4 /* A / (N*m) */ * 1000. / 3.36 /* count / A */))));
                     _dynamixel_controller.recv(status);
                 }
             }
@@ -700,8 +696,8 @@ namespace dynamixel {
 
         _prev_commands.resize(_servos.size(), 0.0);
         _joint_commands.resize(_servos.size(), 0.0);
-        _prev_commands2.resize(_servos.size(), 0.0);
-        _joint_commands2.resize(_servos.size(), 0.0);
+        _prev_limits.resize(_servos.size());
+        _joint_limits.resize(_servos.size());
         _joint_angles.resize(_servos.size(), 0.0);
         _joint_velocities.resize(_servos.size(), 0.0);
         _joint_efforts.resize(_servos.size(), 0.0);
