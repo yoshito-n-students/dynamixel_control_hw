@@ -9,7 +9,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   urdf
   std_msgs
-  embedded_joint_limits_interface
+  posvelacceff_command_interface
   message_generation
   hardware_interface
   controller_manager
