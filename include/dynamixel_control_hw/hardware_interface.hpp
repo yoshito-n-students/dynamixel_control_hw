@@ -376,6 +376,35 @@ namespace dynamixel {
                 ROS_WARN_STREAM("Did not receive any data when reading "
                     << _dynamixel_map[_servos[i]->id()] << "'s velocity");
             }
+
+            dynamixel::StatusPacket<Protocol> status_current;
+            try {
+                _dynamixel_controller.send(_servos[i]->get_present_current());
+                _dynamixel_controller.recv(status_current);
+            }
+            catch (dynamixel::errors::Error& e) {
+                ROS_ERROR_STREAM("Caught a Dynamixel exception while getting  "
+                    << _dynamixel_map[_servos[i]->id()] << "'s current\n"
+                    << e.msg());
+            }
+            if (status_current.valid()) {
+                try {
+                    // TODO: use torque constant loaded from params
+                    _joint_states[i].eff
+                        = _servos[i]->parse_present_current(status_current) 
+                        * 8.4 / 5.2 /* (N*m) / A */ 
+                        * 3.36 / 1000. /* A / count */;
+                }
+                catch (dynamixel::errors::Error& e) {
+                    ROS_ERROR_STREAM("Unpack exception while getting  "
+                        << _dynamixel_map[_servos[i]->id()] << "'s current\n"
+                        << e.msg());
+                }
+            }
+            else {
+                ROS_WARN_STREAM("Did not receive any data when reading "
+                    << _dynamixel_map[_servos[i]->id()] << "'s current");
+            }
         }
     }
 
