@@ -483,8 +483,11 @@ namespace dynamixel {
                     }
                     // Sending the profile velocity only when needed
                     if (std::abs(_joint_commands[i].vel - _prev_commands[i].vel) >= std::numeric_limits<double>::epsilon()) {
-                        // TODO: send the profile velocity
+                        _dynamixel_controller.send(
+                            _servos[i]->reg_profile_speed(static_cast<uint32_t>(static_cast<int32_t>(
+                                _joint_commands[i].vel * 30. / M_PI /* rad/s -> rpm */ / 0.229 /* count / rpm */))));
                         _prev_commands[i].vel = _joint_commands[i].vel;
+                        _dynamixel_controller.recv(status);
                     }
                     // Sending the profile accel only when needed
                     if (std::abs(_joint_commands[i].acc - _prev_commands[i].acc) >= std::numeric_limits<double>::epsilon()) {
