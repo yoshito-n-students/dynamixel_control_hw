@@ -391,7 +391,7 @@ namespace dynamixel {
                 try {
                     // TODO: use torque constant loaded from params
                     _joint_states[i].eff
-                        = _servos[i]->parse_present_current(status_current) 
+                        = static_cast<int16_t>(_servos[i]->parse_present_current(status_current))
                         * 8.4 / 5.2 /* (N*m) / A */ 
                         * 3.36 / 1000. /* A / count */;
                 }
@@ -472,35 +472,39 @@ namespace dynamixel {
                     _dynamixel_controller.recv(status);
                 }
                 else if (OperatingMode::torque_multi == mode) {
-                    // Sending the pos command only when needed
-                    if (std::abs(_joint_commands[i].pos - _prev_commands[i].pos) >= std::numeric_limits<double>::epsilon()) {
-                        // we do not use reg_goal_position_angle() because it throws an error
-                        // if command is out of [0, 2PI]
-                        _dynamixel_controller.send(
-                            _servos[i]->reg_goal_position(static_cast<int32_t>(_joint_commands[i].pos * 4095. / (2. * M_PI))));
-                        _prev_commands[i].pos = _joint_commands[i].pos;
-                        _dynamixel_controller.recv(status);
-                    }
+                    bool do_write_pos(std::abs(_joint_commands[i].pos - _prev_commands[i].pos) >= std::numeric_limits<double>::epsilon());
                     // Sending the profile velocity only when needed
                     if (std::abs(_joint_commands[i].vel - _prev_commands[i].vel) >= std::numeric_limits<double>::epsilon()) {
                         _dynamixel_controller.send(
-                            _servos[i]->reg_profile_speed(static_cast<uint32_t>(static_cast<int32_t>(
+                            _servos[i]->set_profile_speed(static_cast<uint32_t>(static_cast<int32_t>(
                                 _joint_commands[i].vel * 30. / M_PI /* rad/s -> rpm */ / 0.229 /* count / rpm */))));
                         _prev_commands[i].vel = _joint_commands[i].vel;
                         _dynamixel_controller.recv(status);
+                        do_write_pos = true; // to make this change affect, goal position is required to be updated
                     }
-                    // Sending the profile accel only when needed
+                    // Sending the profile acceleration only when needed
                     if (std::abs(_joint_commands[i].acc - _prev_commands[i].acc) >= std::numeric_limits<double>::epsilon()) {
                         // TODO: send the profile accel
                         _prev_commands[i].acc = _joint_commands[i].acc;
+                        do_write_pos = true;
                     }
                     // Sending the effort limit only when needed
                     if (std::abs(_joint_commands[i].eff - _prev_commands[i].eff) >= std::numeric_limits<double>::epsilon()) {
                         // TODO: use torque constant loaded from params
                         _dynamixel_controller.send(
-                            _servos[i]->reg_goal_current(static_cast<uint16_t>(static_cast<int16_t>(
+                            _servos[i]->set_goal_current(static_cast<uint16_t>(static_cast<int16_t>(
                                 _joint_commands[i].eff * 5.2 / 8.4 /* A / (N*m) */ * 1000. / 3.36 /* count / A */))));
                         _prev_commands[i].eff = _joint_commands[i].eff;
+                        _dynamixel_controller.recv(status);
+                        // no goal position update is required
+                    }
+                    // Sending the pos command only when needed
+                    if (do_write_pos) {
+                        // we do not use reg_goal_position_angle() because it throws an error
+                        // if command is out of [0, 2PI]
+                        _dynamixel_controller.send(
+                            _servos[i]->reg_goal_position(static_cast<int32_t>(_joint_commands[i].pos * 4095. / (2. * M_PI))));
+                        _prev_commands[i].pos = _joint_commands[i].pos;
                         _dynamixel_controller.recv(status);
                     }
                 }
