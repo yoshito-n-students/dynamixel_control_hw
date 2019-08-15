@@ -131,6 +131,8 @@ namespace dynamixel {
         std::unordered_map<id_t, double> _dynamixel_max_speed;
         // Map for angle offsets (ID: correction in radians)
         std::unordered_map<id_t, double> _dynamixel_corrections;
+        // Map for torque constants (ID: N*m/count)
+        std::unordered_map<id_t, double> _torque_constants;
 
         // To get joint limits from the parameter server
         ros::NodeHandle _nh;
@@ -377,33 +379,33 @@ namespace dynamixel {
                     << _dynamixel_map[_servos[i]->id()] << "'s velocity");
             }
 
-            dynamixel::StatusPacket<Protocol> status_current;
-            try {
-                _dynamixel_controller.send(_servos[i]->get_present_current());
-                _dynamixel_controller.recv(status_current);
-            }
-            catch (dynamixel::errors::Error& e) {
-                ROS_ERROR_STREAM("Caught a Dynamixel exception while getting  "
-                    << _dynamixel_map[_servos[i]->id()] << "'s current\n"
-                    << e.msg());
-            }
-            if (status_current.valid()) {
+            if (_torque_constants.count(_servos[i]->id()) > 0) {
+                dynamixel::StatusPacket<Protocol> status_current;
                 try {
-                    // TODO: use torque constant loaded from params
-                    _joint_states[i].eff
-                        = static_cast<int16_t>(_servos[i]->parse_present_current(status_current))
-                        * 8.4 / 5.2 /* (N*m) / A */ 
-                        * 3.36 / 1000. /* A / count */;
+                    _dynamixel_controller.send(_servos[i]->get_present_current());
+                    _dynamixel_controller.recv(status_current);
                 }
                 catch (dynamixel::errors::Error& e) {
-                    ROS_ERROR_STREAM("Unpack exception while getting  "
+                    ROS_ERROR_STREAM("Caught a Dynamixel exception while getting  "
                         << _dynamixel_map[_servos[i]->id()] << "'s current\n"
                         << e.msg());
                 }
-            }
-            else {
-                ROS_WARN_STREAM("Did not receive any data when reading "
-                    << _dynamixel_map[_servos[i]->id()] << "'s current");
+                if (status_current.valid()) {
+                    try {
+                        _joint_states[i].eff
+                            = static_cast<int16_t>(_servos[i]->parse_present_current(status_current))
+                            * _torque_constants[_servos[i]->id()];
+                    }
+                    catch (dynamixel::errors::Error& e) {
+                        ROS_ERROR_STREAM("Unpack exception while getting  "
+                            << _dynamixel_map[_servos[i]->id()] << "'s current\n"
+                            << e.msg());
+                    }
+                }
+                else {
+                    ROS_WARN_STREAM("Did not receive any data when reading "
+                        << _dynamixel_map[_servos[i]->id()] << "'s current");
+                }
             }
         }
     }
@@ -489,11 +491,11 @@ namespace dynamixel {
                         do_write_pos = true;
                     }
                     // Sending the effort limit only when needed
-                    if (std::abs(_joint_commands[i].eff - _prev_commands[i].eff) >= std::numeric_limits<double>::epsilon()) {
-                        // TODO: use torque constant loaded from params
+                    if (std::abs(_joint_commands[i].eff - _prev_commands[i].eff) >= std::numeric_limits<double>::epsilon()
+                        && _torque_constants.count(_servos[i]->id()) > 0) {
                         _dynamixel_controller.send(
                             _servos[i]->set_goal_current(static_cast<uint16_t>(static_cast<int16_t>(
-                                _joint_commands[i].eff * 5.2 / 8.4 /* A / (N*m) */ * 1000. / 3.36 /* count / A */))));
+                                _joint_commands[i].eff / _torque_constants[_servos[i]->id()]))));
                         _prev_commands[i].eff = _joint_commands[i].eff;
                         _dynamixel_controller.recv(status);
                         // no goal position update is required
@@ -599,6 +601,16 @@ namespace dynamixel {
 
                     if (it->second.hasMember("reverse")) {
                         _invert[id] = servos_param[it->first]["reverse"];
+                    }
+
+                    if (it->second.hasMember("torque_constant")) {
+                        _torque_constants[id] 
+                            = static_cast<double>(servos_param[it->first]["torque_constant"]);
+                    }
+                    else {
+                        ROS_WARN_STREAM("Please declare a torque constant [N*m/count] for actuator " 
+                            << it->first 
+                            << " to get state or set command regarding torque.");
                     }
                 }
             }
