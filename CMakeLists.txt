@@ -10,17 +10,16 @@ find_package(catkin REQUIRED COMPONENTS
   urdf
   std_msgs
   posvelacceff_command_interface
-  message_generation
   hardware_interface
   controller_manager
   libdynamixel_ros
+  transmission_interface
 )
 
 catkin_package(CATKIN_DEPENDS
   roscpp
   urdf
   std_msgs
-  message_runtime
 )
 
 include_directories(
